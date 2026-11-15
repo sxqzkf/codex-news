@@ -213,7 +213,7 @@
     .panel-section:last-child { border-bottom:0; }
     .section-title { margin:0 0 12px; color:var(--muted); font-size:11px; font-weight:760; text-transform:uppercase; }
     .segmented {
-      display:grid; grid-template-columns:repeat(3,1fr); gap:4px; padding:4px;
+      display:grid; grid-template-columns:repeat(4,1fr); gap:4px; padding:4px;
       background:var(--control-bg); border:1px solid var(--line); border-radius:7px;
     }
     .segmented button {
@@ -369,7 +369,8 @@
           <div class="segmented" id="difficultyGroup">
             <button type="button" data-level="easy">休闲</button>
             <button type="button" data-level="medium">进阶</button>
-            <button type="button" data-level="hard" class="active">大师</button>
+            <button type="button" data-level="hard">大师</button>
+            <button type="button" data-level="deep" class="active">深度思考</button>
           </div>
         </section>
         <section class="panel-section">
@@ -430,6 +431,13 @@
       const CENTER = 112;
       const STORAGE_KEY = "yijing-gomoku-state-v1";
       const COL_LABELS = "ABCDEFGHIJKLMNO";
+      const WIN_SCORE = 1e9;
+      const LEVEL_CONFIGS = Object.freeze({
+        easy: Object.freeze({ label:"休闲棋力", searchDepth:1, rootCandidates:9, searchBranch:6, noise:1400, mistakeRate:.2, delay:260, timeLimit:0 }),
+        medium: Object.freeze({ label:"进阶棋力", searchDepth:2, rootCandidates:12, searchBranch:8, noise:240, mistakeRate:.04, delay:340, timeLimit:260 }),
+        hard: Object.freeze({ label:"大师棋力", searchDepth:4, rootCandidates:14, searchBranch:9, noise:0, mistakeRate:0, delay:520, timeLimit:850 }),
+        deep: Object.freeze({ label:"深度思考", searchDepth:6, rootCandidates:16, searchBranch:10, noise:0, mistakeRate:0, delay:760, timeLimit:2600 })
+      });
       const boardEl = document.getElementById("board");
       const statusStone = document.getElementById("statusStone");
       const statusText = document.getElementById("statusText");
@@ -466,6 +474,7 @@
       let musicTimer = 0;
       let musicStep = 0;
       let musicActive = false;
+      let searchAborted = false;
       const cells = [];
       const windows = [];
       const pointWindows = Array.from({ length: SIZE * SIZE }, () => []);
@@ -539,7 +548,7 @@
         try {
           const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
           if (saved.scores) scores = Object.assign({ win:0, draw:0, loss:0 }, saved.scores);
-          if (["easy","medium","hard"].includes(saved.difficulty)) difficulty = saved.difficulty;
+          difficulty = normalizeDifficulty(saved.difficulty);
           if ([HUMAN,AI].includes(saved.playerColor)) playerColor = saved.playerColor;
           if (typeof saved.soundEnabled === "boolean") soundEnabled = saved.soundEnabled;
           if (typeof saved.musicEnabled === "boolean") musicEnabled = saved.musicEnabled;
@@ -654,7 +663,7 @@
         if (gameOver || turn !== aiColor) return;
         thinking = true; render();
         const token = generation;
-        const delay = difficulty === "hard" ? 420 : 300;
+        const delay = getLevelConfig().delay;
         timerId = setTimeout(() => {
           if (token !== generation || gameOver || turn !== aiColor) return;
           const move = chooseAIMove();
@@ -727,77 +736,197 @@
         return false;
       }
 
+      function normalizeDifficulty(value) {
+        return Object.prototype.hasOwnProperty.call(LEVEL_CONFIGS, value) ? value : "deep";
+      }
+
+      function getLevelConfig() {
+        return LEVEL_CONFIGS[normalizeDifficulty(difficulty)];
+      }
+
+      function getOpponentColor(color) {
+        return color === aiColor ? playerColor : aiColor;
+      }
+
+      function findImmediateWinningMoves(color, pool) {
+        const emptyCells = pool || getNearbyEmpty();
+        return emptyCells.filter(idx => board[idx] === EMPTY && wouldWin(idx, color));
+      }
+
+      function isMoveSafeForColor(idx, color) {
+        if (board[idx] !== EMPTY) return false;
+        board[idx] = color;
+        const winsImmediately = wouldWin(idx, color);
+        const opponentReplies = winsImmediately ? [] : findImmediateWinningMoves(getOpponentColor(color));
+        board[idx] = EMPTY;
+        return winsImmediately || opponentReplies.length === 0;
+      }
+
       function chooseAIMove() {
-        const candidates = getCandidates(aiColor, branchingLimit(), true);
+        const config = getLevelConfig();
+        const nearby = getNearbyEmpty();
+        if (!nearby.length) return -1;
+
+        const winningMoves = findImmediateWinningMoves(aiColor, nearby);
+        if (winningMoves.length) {
+          return winningMoves.sort((a,b) => centerDistance(a) - centerDistance(b))[0];
+        }
+
+        const opponentWinningMoves = findImmediateWinningMoves(playerColor, nearby);
+        if (opponentWinningMoves.length === 1) return opponentWinningMoves[0];
+
+        const candidates = getCandidates(aiColor, config.rootCandidates, true);
         if (!candidates.length) {
-          const fallback = getNearbyEmpty().sort((a,b) => centerDistance(a) - centerDistance(b));
-          return fallback[0] === undefined ? -1 : fallback[0];
+          return nearby.sort((a,b) => centerDistance(a) - centerDistance(b))[0];
         }
-        const config = {
-          easy: { depth:1, noise:2400, top:10 },
-          medium: { depth:2, noise:450, top:10 },
-          hard: { depth:3, noise:70, top:8 }
-        }[difficulty];
-        let bestScore = -Infinity;
-        const bestMoves = [];
-        for (const item of candidates.slice(0, config.top)) {
-          board[item.idx] = aiColor;
-          let score;
-          if (wouldWin(item.idx, aiColor)) score = 1e10;
-          else score = minimax(config.depth - 1, -Infinity, Infinity, false);
-          board[item.idx] = EMPTY;
-          score += Math.random() * config.noise;
-          if (score > bestScore + .001) {
-            bestScore = score; bestMoves.length = 0; bestMoves.push(item.idx);
-          } else if (Math.abs(score - bestScore) <= .001) bestMoves.push(item.idx);
+
+        const safeMoves = candidates.filter(item => isMoveSafeForColor(item.idx, aiColor));
+        const legalMoves = safeMoves.length ? safeMoves : candidates;
+
+        if (config.searchDepth <= 1) {
+          return chooseEasyMove(legalMoves, config);
         }
-        return bestMoves[Math.floor(Math.random() * bestMoves.length)];
+        return searchBestMove(legalMoves, config);
       }
 
-      function branchingLimit() {
-        if (difficulty === "hard") return 8;
-        if (difficulty === "medium") return 10;
-        return 14;
+      function chooseEasyMove(moves, config) {
+        const scored = moves.map(item => ({
+          idx:item.idx,
+          score:item.score + Math.random() * config.noise
+        })).sort((a,b) => b.score - a.score);
+
+        if (Math.random() < config.mistakeRate && scored.length > 2) {
+          const alternateCount = Math.min(3, scored.length) - 1;
+          const offset = 1 + Math.floor(Math.random() * alternateCount);
+          return scored[offset].idx;
+        }
+        return scored[0].idx;
       }
 
-      function minimax(depth, alpha, beta, maximizing) {
+      function searchBestMove(rootMoves, config) {
+        const deadline = Date.now() + config.timeLimit;
+        let ordered = rootMoves.slice(0, config.rootCandidates);
+        let bestMove = ordered[0].idx;
+
+        for (let depth = 1; depth <= config.searchDepth; depth++) {
+          searchAborted = false;
+          let iterationBest = ordered[0].idx;
+          let iterationScore = -Infinity;
+          let alpha = -Infinity;
+          const scored = [];
+
+          for (const item of ordered) {
+            board[item.idx] = aiColor;
+            let score;
+            if (wouldWin(item.idx, aiColor)) score = WIN_SCORE;
+            else score = minimax(depth - 1, alpha, Infinity, playerColor, 1, deadline, config.searchBranch);
+            board[item.idx] = EMPTY;
+
+            scored.push({ idx:item.idx, score:score });
+            if (score > iterationScore) {
+              iterationScore = score;
+              iterationBest = item.idx;
+            }
+            alpha = Math.max(alpha, iterationScore);
+            if (searchAborted) break;
+          }
+
+          if (!searchAborted || depth === 1) bestMove = iterationBest;
+          if (searchAborted || Date.now() >= deadline - 40) break;
+
+          scored.sort((a,b) => b.score - a.score);
+          ordered = scored.map(item => ({ idx:item.idx, score:item.score }));
+        }
+        return bestMove;
+      }
+
+      function minimax(depth, alpha, beta, side, ply, deadline, branchLimit) {
+        if (Date.now() >= deadline) {
+          searchAborted = true;
+          return evaluateGlobal();
+        }
         if (depth <= 0) return evaluateGlobal();
-        const side = maximizing ? aiColor : HUMAN;
-        const candidates = getCandidates(side, branchingLimit(), true);
+
+        const maximizing = side === aiColor;
+        const candidates = getSearchCandidates(side, branchLimit);
         if (!candidates.length) return evaluateGlobal();
+
         let best = maximizing ? -Infinity : Infinity;
         for (const item of candidates) {
           board[item.idx] = side;
           let score;
           if (wouldWin(item.idx, side)) {
-            score = maximizing ? 1e9 + depth * 1e6 : -1e9 - depth * 1e6;
-          } else score = minimax(depth - 1, alpha, beta, !maximizing);
-          board[item.idx] = EMPTY;
-          if (maximizing) {
-            best = Math.max(best, score); alpha = Math.max(alpha, best);
+            score = side === aiColor ? WIN_SCORE - ply : -WIN_SCORE + ply;
           } else {
-            best = Math.min(best, score); beta = Math.min(beta, best);
+            score = minimax(depth - 1, alpha, beta, getOpponentColor(side), ply + 1, deadline, branchLimit);
           }
-          if (beta <= alpha) break;
+          board[item.idx] = EMPTY;
+
+          if (maximizing) {
+            best = Math.max(best, score);
+            alpha = Math.max(alpha, best);
+          } else {
+            best = Math.min(best, score);
+            beta = Math.min(beta, best);
+          }
+          if (beta <= alpha || searchAborted) break;
         }
         return best;
       }
 
       function getCandidates(color, limit, includeTactics) {
-        const opponent = color === HUMAN ? AI : HUMAN;
+        const opponent = getOpponentColor(color);
         const emptyCells = getNearbyEmpty();
         if (!emptyCells.length) return [];
+
         const scored = emptyCells.map(idx => {
           const ownGain = evaluatePlacement(idx, color);
           const oppGain = includeTactics ? evaluatePlacement(idx, opponent) : 0;
-          const winBonus = wouldWin(idx, color) ? 1e8 : 0;
-          const blockBonus = includeTactics && wouldWin(idx, opponent) ? 6e7 : 0;
+          const winBonus = wouldWin(idx, color) ? WIN_SCORE : 0;
+          const blockBonus = includeTactics && wouldWin(idx, opponent) ? WIN_SCORE * .8 : 0;
           const centerBonus = Math.max(0, 18 - centerDistance(idx) * 2);
-          const noise = Math.random() * (includeTactics ? 14 : 180);
-          return { idx:idx, score:ownGain + oppGain * .92 + winBonus + blockBonus + centerBonus + noise };
+          return { idx:idx, score:ownGain + oppGain * .94 + winBonus + blockBonus + centerBonus };
         });
-        scored.sort((a,b) => b.score - a.score);
+
+        scored.sort((a,b) => b.score - a.score || centerDistance(a.idx) - centerDistance(b.idx));
         return scored.slice(0, limit);
+      }
+
+      function getSearchCandidates(color, limit) {
+        const opponent = getOpponentColor(color);
+        const emptyCells = getNearbyEmpty();
+        if (!emptyCells.length) return [];
+
+        const scored = emptyCells.map(idx => {
+          const own = quickMoveScore(idx, color);
+          const block = quickMoveScore(idx, opponent) * .92;
+          const winBonus = wouldWin(idx, color) ? WIN_SCORE : 0;
+          const blockBonus = wouldWin(idx, opponent) ? WIN_SCORE * .82 : 0;
+          return {
+            idx:idx,
+            score:own + block + winBonus + blockBonus + Math.max(0, 12 - centerDistance(idx))
+          };
+        });
+
+        scored.sort((a,b) => b.score - a.score || centerDistance(a.idx) - centerDistance(b.idx));
+        return scored.slice(0, limit);
+      }
+
+      function quickMoveScore(idx, color) {
+        const opponent = getOpponentColor(color);
+        let own = 0;
+        let block = 0;
+        for (const line of pointWindows[idx]) {
+          let ownCount = 0;
+          let opponentCount = 0;
+          for (const point of line) {
+            if (board[point] === color) ownCount++;
+            else if (board[point] === opponent) opponentCount++;
+          }
+          if (opponentCount === 0) own += placementValue(ownCount + 1);
+          if (ownCount === 0) block += placementValue(opponentCount + 1);
+        }
+        return own + block * .86;
       }
 
       function evaluatePlacement(idx, color) {
@@ -810,50 +939,105 @@
       }
 
       function scoreWindow(line, color) {
-        let own = 0, opponent = 0;
+        let own = 0;
+        let opponent = 0;
         for (const idx of line) {
           if (board[idx] === color) own++;
           else if (board[idx] !== EMPTY) opponent++;
         }
         if (opponent > 0) return own * own * 2;
-        if (own === 5) return 1e7;
-        if (own === 4) return 12000;
-        if (own === 3) return 1400;
-        if (own === 2) return 160;
-        if (own === 1) return 18;
+        return placementValue(own);
+      }
+
+      function placementValue(count) {
+        if (count >= 5) return 1e7;
+        if (count === 4) return 16000;
+        if (count === 3) return 1800;
+        if (count === 2) return 190;
+        if (count === 1) return 18;
         return 0;
       }
 
       function evaluateGlobal() {
+        const directions = [[1,0],[0,1],[1,1],[1,-1]];
         let score = 0;
+
+        for (let row = 0; row < SIZE; row++) {
+          for (let col = 0; col < SIZE; col++) {
+            const idx = row * SIZE + col;
+            const color = board[idx];
+            if (color === EMPTY) continue;
+
+            for (const direction of directions) {
+              const dr = direction[0];
+              const dc = direction[1];
+              const previousRow = row - dr;
+              const previousCol = col - dc;
+              if (inBounds(previousRow, previousCol) && board[previousRow * SIZE + previousCol] === color) continue;
+
+              let count = 1;
+              let nextRow = row + dr;
+              let nextCol = col + dc;
+              while (inBounds(nextRow, nextCol) && board[nextRow * SIZE + nextCol] === color) {
+                count++;
+                nextRow += dr;
+                nextCol += dc;
+              }
+
+              const beforeOpen = inBounds(previousRow, previousCol) && board[previousRow * SIZE + previousCol] === EMPTY;
+              const afterOpen = inBounds(nextRow, nextCol) && board[nextRow * SIZE + nextCol] === EMPTY;
+              const openEnds = Number(beforeOpen) + Number(afterOpen);
+              const value = runValue(count, openEnds);
+              score += color === aiColor ? value : -value * 1.04;
+            }
+          }
+        }
+
         for (const line of windows) {
-          let ai = 0, human = 0;
+          let ai = 0;
+          let human = 0;
           for (const idx of line) {
             if (board[idx] === aiColor) ai++;
             else if (board[idx] === playerColor) human++;
           }
-          score += patternValue(ai) - patternValue(human) * 1.04;
+          if (ai && !human) score += threatWindowValue(ai);
+          else if (human && !ai) score -= threatWindowValue(human) * 1.04;
         }
+
         for (let idx = 0; idx < board.length; idx++) {
-          if (board[idx] === aiColor) score += Math.max(0, 8 - centerDistance(idx)) * .3;
-          else if (board[idx] === playerColor) score -= Math.max(0, 8 - centerDistance(idx)) * .3;
+          const centerValue = Math.max(0, 8 - centerDistance(idx)) * .35;
+          if (board[idx] === aiColor) score += centerValue;
+          else if (board[idx] === playerColor) score -= centerValue;
         }
         return score;
       }
 
-      function patternValue(count) {
-        if (count === 5) return 1e8;
-        if (count === 4) return 14000;
-        if (count === 3) return 1600;
-        if (count === 2) return 180;
-        if (count === 1) return 20;
+      function runValue(count, openEnds) {
+        if (count >= 5) return WIN_SCORE * .8;
+        if (count === 4) return openEnds === 2 ? 52000 : 10500;
+        if (count === 3) return openEnds === 2 ? 6200 : 760;
+        if (count === 2) return openEnds === 2 ? 240 : 38;
+        if (count === 1) return openEnds === 2 ? 12 : 2;
+        return 0;
+      }
+
+      function threatWindowValue(count) {
+        if (count === 5) return WIN_SCORE * .85;
+        if (count === 4) return 13500;
+        if (count === 3) return 1350;
+        if (count === 2) return 125;
+        if (count === 1) return 10;
         return 0;
       }
 
       function getNearbyEmpty() {
         const result = [];
         const seen = new Uint8Array(SIZE * SIZE);
-        const occupied = moveHistory.length ? moveHistory.map(move => move.idx) : [CENTER];
+        const occupied = [];
+        for (let idx = 0; idx < board.length; idx++) {
+          if (board[idx] !== EMPTY) occupied.push(idx);
+        }
+        if (!occupied.length) occupied.push(CENTER);
         for (const idx of occupied) {
           const row = Math.floor(idx / SIZE), col = idx % SIZE;
           for (let dr = -2; dr <= 2; dr++) {
@@ -965,9 +1149,7 @@
       }
 
       function difficultyLabel() {
-        if (difficulty === "easy") return "休闲棋力";
-        if (difficulty === "medium") return "进阶棋力";
-        return "大师棋力";
+        return getLevelConfig().label;
       }
 
       function positionLabel(idx) {
