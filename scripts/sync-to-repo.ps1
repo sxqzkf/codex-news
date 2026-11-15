@@ -10,14 +10,27 @@ if (-not $Message) {
     $Message = "同步软件更新 " + (Get-Date -Format "yyyy-MM-dd HH:mm")
 }
 
-git -C $repoRoot add -A
-$pending = git -C $repoRoot status --porcelain
+function Invoke-Git {
+    param([string[]]$Arguments)
 
-if ($pending) {
-    git -C $repoRoot `
-        -c user.name="sxqzkf" `
-        -c user.email="3677756881@qq.com" `
-        commit -m $Message
+    & git -C $repoRoot @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw ("git " + ($Arguments -join " ") + " failed with exit code " + $LASTEXITCODE)
+    }
 }
 
-git -C $repoRoot -c http.sslBackend=openssl push $remoteUrl main:main
+$pending = & git -C $repoRoot status --porcelain
+if ($LASTEXITCODE -ne 0) {
+    throw "Unable to read repository status with exit code $LASTEXITCODE"
+}
+
+if ($pending) {
+    Invoke-Git @("add", "-A")
+    Invoke-Git @(
+        "-c", "user.name=sxqzkf",
+        "-c", "user.email=3677756881@qq.com",
+        "commit", "-m", $Message
+    )
+}
+
+Invoke-Git @("-c", "http.sslBackend=openssl", "push", $remoteUrl, "main:main")

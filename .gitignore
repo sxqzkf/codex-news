@@ -1,4 +1,5 @@
 *.log
 tmp-*.cjs
+.cc-switch/
 .DS_Store
 Thumbs.db
