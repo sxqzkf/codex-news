@@ -212,6 +212,19 @@
     .panel-section { padding:16px; border-bottom:1px solid var(--line); }
     .panel-section:last-child { border-bottom:0; }
     .section-title { margin:0 0 12px; color:var(--muted); font-size:11px; font-weight:760; text-transform:uppercase; }
+    .section-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+    .section-heading .section-title { display:flex; align-items:center; gap:6px; }
+    .tactic-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; }
+    .tactic-btn {
+      min-width:0; min-height:34px; padding:6px 4px; border-radius:5px;
+      border:1px solid var(--line); background:var(--control-bg); color:var(--muted);
+      font-size:11px; font-weight:680; white-space:nowrap;
+    }
+    .tactic-btn:hover { border-color:var(--teal); color:var(--text); }
+    .tactic-btn.active { border-color:var(--teal); background:rgba(22,116,122,.22); color:var(--text); }
+    .tactic-btn:disabled { opacity:.42; cursor:not-allowed; }
+    .tactic-number { color:var(--gold); margin-right:3px; font-variant-numeric:tabular-nums; }
+    .tactic-tip { margin:9px 0 0; color:var(--muted); font-size:11px; line-height:1.55; }
     .segmented {
       display:grid; grid-template-columns:repeat(4,1fr); gap:4px; padding:4px;
       background:var(--control-bg); border:1px solid var(--line); border-radius:7px;
@@ -290,7 +303,8 @@
     }
     .move-item:last-child { border-color:rgba(54,183,177,.5); background:rgba(22,116,122,.16); }
     .move-index { color:var(--history-muted); font-variant-numeric:tabular-nums; }
-    .move-player { display:flex; align-items:center; gap:7px; }
+    .move-player { display:flex; align-items:center; flex-wrap:wrap; gap:7px; }
+    .move-tactic { color:var(--gold); font-size:10px; font-weight:680; }
     .move-dot { width:13px; height:13px; border-radius:50%; flex:0 0 auto; }
     .move-dot.black { background:#171B1B; border:1px solid #555; }
     .move-dot.white { background:#F0F3F3; border:1px solid #AAB; }
@@ -373,6 +387,27 @@
             <button type="button" data-level="deep" class="active">深度思考</button>
           </div>
         </section>
+        <section class="panel-section" aria-labelledby="tacticTitle">
+          <div class="section-heading">
+            <h2 class="section-title" id="tacticTitle">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 17.5-8-8L3 6V3h3l3.5 3.5 8 8"/><path d="m13 19 6-6"/><path d="m16 16 4 4"/><path d="m19 21 2-2"/><path d="m14.5 6.5 8-8L21 3l-3.5 3.5-8 8"/><path d="m5 14-4 4"/><path d="m3 19 2 2"/></svg>
+              九式杀招
+            </h2>
+            <span class="move-count">实战识别</span>
+          </div>
+          <div class="tactic-grid" id="tacticGroup">
+            <button type="button" class="tactic-btn" data-tactic="finisher" title="五子连珠，立即获胜"><span class="tactic-number">01</span>绝杀</button>
+            <button type="button" class="tactic-btn" data-tactic="openFour" title="同一方向形成两个制胜点"><span class="tactic-number">02</span>活四</button>
+            <button type="button" class="tactic-btn" data-tactic="doubleFour" title="两个方向各有制胜点"><span class="tactic-number">03</span>双冲四</button>
+            <button type="button" class="tactic-btn" data-tactic="fourThree" title="一方向冲四，另一方向活三"><span class="tactic-number">04</span>四三杀</button>
+            <button type="button" class="tactic-btn" data-tactic="doubleThree" title="两个方向均可转成活四"><span class="tactic-number">05</span>双活三</button>
+            <button type="button" class="tactic-btn" data-tactic="rushFour" title="留有一个下一手制胜点"><span class="tactic-number">06</span>冲四</button>
+            <button type="button" class="tactic-btn" data-tactic="jumpThree" title="形成带跳空的开放三子结构"><span class="tactic-number">07</span>跳三</button>
+            <button type="button" class="tactic-btn" data-tactic="openThree" title="下一手可转成双端活四"><span class="tactic-number">08</span>活三</button>
+            <button type="button" class="tactic-btn" data-tactic="counter" title="封堵对手制胜点并反击成形"><span class="tactic-number">09</span>反杀</button>
+          </div>
+          <p class="tactic-tip">点选招式，标记当前棋局中的安全应手；形成杀招时，落子记录会同步显示。</p>
+        </section>
         <section class="panel-section">
           <h2 class="section-title">执子选择</h2>
           <div class="choice-row" id="colorGroup">
@@ -438,6 +473,19 @@
         hard: Object.freeze({ label:"大师棋力", searchDepth:4, rootCandidates:14, searchBranch:9, noise:0, mistakeRate:0, delay:520, timeLimit:850 }),
         deep: Object.freeze({ label:"深度思考", searchDepth:6, rootCandidates:16, searchBranch:10, noise:0, mistakeRate:0, delay:760, timeLimit:2600 })
       });
+      const DIRECTIONS = [[1,0],[0,1],[1,1],[1,-1]];
+      const TACTICS = Object.freeze({
+        finisher: { name:"五连绝杀", weight:WIN_SCORE, description:"五子连珠，立即获胜" },
+        openFour: { name:"活四", weight:115000, description:"同一方向形成两个制胜点" },
+        doubleFour: { name:"双冲四", weight:130000, description:"两个方向各有制胜点" },
+        fourThree: { name:"四三杀", weight:155000, description:"一方向冲四，另一方向活三" },
+        doubleThree: { name:"双活三", weight:42000, description:"两个方向均可转成活四" },
+        rushFour: { name:"冲四", weight:26000, description:"留有一个下一手制胜点" },
+        jumpThree: { name:"跳三", weight:9500, description:"形成带跳空的开放三子结构" },
+        openThree: { name:"活三", weight:8200, description:"下一手可转成双端活四" },
+        counter: { name:"反杀", weight:18000, description:"封堵对手制胜点并反击成形" }
+      });
+      const TACTIC_PRIORITY = ["finisher","fourThree","doubleFour","openFour","doubleThree","rushFour","jumpThree","openThree","counter"];
       const boardEl = document.getElementById("board");
       const statusStone = document.getElementById("statusStone");
       const statusText = document.getElementById("statusText");
@@ -475,6 +523,7 @@
       let musicStep = 0;
       let musicActive = false;
       let searchAborted = false;
+      let activeTactic = "";
       const cells = [];
       const windows = [];
       const pointWindows = Array.from({ length: SIZE * SIZE }, () => []);
@@ -600,6 +649,11 @@
           if (!btn) return;
           difficulty = btn.dataset.level; updateSettingsUI(); persist(); newGame();
         });
+        document.getElementById("tacticGroup").addEventListener("click", event => {
+          const btn = event.target.closest("button[data-tactic]");
+          if (!btn) return;
+          showTacticHint(btn.dataset.tactic);
+        });
         document.getElementById("colorGroup").addEventListener("click", event => {
           const btn = event.target.closest("button[data-color]");
           if (!btn) return;
@@ -644,7 +698,7 @@
       function newGame() {
         generation++; clearTimeout(timerId);
         board = Array(SIZE * SIZE).fill(EMPTY); moveHistory = []; winCells = [];
-        hintIndex = -1; gameOver = false; thinking = false;
+        hintIndex = -1; activeTactic = ""; gameOver = false; thinking = false;
         aiColor = playerColor === HUMAN ? AI : HUMAN; turn = HUMAN; render();
         if (playerColor === AI) scheduleAI();
         moveCaption.textContent = playerColor === HUMAN ? "你执黑棋，黑方先行" : "你执白棋，电脑执黑先行";
@@ -675,7 +729,17 @@
       }
 
       function placeStone(idx, color) {
-        board[idx] = color; moveHistory.push({ idx: idx, color: color }); hintIndex = -1;
+        board[idx] = color;
+        const analysis = analyzeMove(idx, color);
+        moveHistory.push({ idx: idx, color: color, tactics: analysis.ids });
+        hintIndex = -1; activeTactic = "";
+        if (analysis.ids.length) {
+          const label = formatTacticNames(analysis.ids);
+          moveCaption.textContent = (color === playerColor ? "你" : "电脑") + "使出「" + label + "」";
+          if (color === playerColor && !analysis.ids.includes("finisher")) showToast("杀招成形 · " + label);
+        } else {
+          moveCaption.textContent = "第 " + moveHistory.length + " 手落定，继续布局";
+        }
         playTone(color === HUMAN ? 430 : 560,.055,"sine",.045);
       }
 
@@ -874,6 +938,137 @@
         return best;
       }
 
+      function wouldWinInDirection(idx, color, direction) {
+        const dr = direction[0];
+        const dc = direction[1];
+        const row = Math.floor(idx / SIZE);
+        const col = idx % SIZE;
+        let count = 1;
+        for (let sign = -1; sign <= 1; sign += 2) {
+          for (let step = 1; step < 5; step++) {
+            const r = row + dr * step * sign;
+            const c = col + dc * step * sign;
+            if (!inBounds(r,c) || board[r * SIZE + c] !== color) break;
+            count++;
+          }
+        }
+        return count >= 5;
+      }
+
+      function getWinningPointsByDirection(color, pool) {
+        return DIRECTIONS.map(direction => ({
+          direction:direction,
+          points:pool.filter(idx => board[idx] === EMPTY && wouldWinInDirection(idx, color, direction))
+        }));
+      }
+
+      function getLiveThreeDirections(color, pool) {
+        const liveDirections = new Set();
+        for (const point of pool) {
+          if (board[point] !== EMPTY) continue;
+          board[point] = color;
+          const nextWins = getWinningPointsByDirection(color, pool);
+          board[point] = EMPTY;
+          nextWins.forEach((item, directionIndex) => {
+            if (item.points.length >= 2) liveDirections.add(directionIndex);
+          });
+        }
+        return Array.from(liveDirections).sort((a,b) => a-b);
+      }
+
+      function hasJumpThree(idx, color) {
+        const row = Math.floor(idx / SIZE);
+        const col = idx % SIZE;
+        for (const direction of DIRECTIONS) {
+          const dr = direction[0];
+          const dc = direction[1];
+          for (let start = -5; start <= 0; start++) {
+            const values = [];
+            for (let offset = 0; offset < 6; offset++) {
+              const step = start + offset;
+              const r = row + dr * step;
+              const c = col + dc * step;
+              if (!inBounds(r,c)) values.push(2);
+              else values.push(board[r * SIZE + c] === color ? 1 : board[r * SIZE + c] === EMPTY ? 0 : 2);
+            }
+            const ownCount = values.filter(value => value === 1).length;
+            const middle = values.slice(1,5).join("");
+            if (ownCount === 3 && values[0] === 0 && values[5] === 0 && (middle === "1011" || middle === "1101")) return true;
+          }
+        }
+        return false;
+      }
+
+      function analyzeMove(idx, color) {
+        if (board[idx] !== color) return { ids:[], score:0 };
+        if (findWin(idx, color)) return { ids:["finisher"], score:TACTICS.finisher.weight };
+
+        const pool = getNearbyEmpty();
+        const wins = getWinningPointsByDirection(color, pool);
+        const fourDirections = wins.filter(item => item.points.length > 0).map(item => DIRECTIONS.indexOf(item.direction));
+        const liveThreeDirections = getLiveThreeDirections(color, pool);
+        const independentThrees = liveThreeDirections.filter(direction => !fourDirections.includes(direction));
+        const ids = [];
+
+        if (fourDirections.length && independentThrees.length) ids.push("fourThree");
+        if (fourDirections.length >= 2) ids.push("doubleFour");
+        if (wins.some(item => item.points.length >= 2)) ids.push("openFour");
+        if (liveThreeDirections.length >= 2) ids.push("doubleThree");
+        if (fourDirections.length) ids.push("rushFour");
+        if (hasJumpThree(idx, color)) ids.push("jumpThree");
+        if (liveThreeDirections.length) ids.push("openThree");
+        if (wouldWin(idx, getOpponentColor(color)) && (fourDirections.length || liveThreeDirections.length)) ids.push("counter");
+
+        return {
+          ids:TACTIC_PRIORITY.filter(id => ids.includes(id)),
+          score:ids.reduce((total,id) => total + TACTICS[id].weight, 0)
+        };
+      }
+
+      function formatTacticNames(ids, limit) {
+        const maxNames = limit || 2;
+        return TACTIC_PRIORITY.filter(id => ids.includes(id)).slice(0,maxNames).map(id => TACTICS[id].name).join(" · ");
+      }
+
+      function findTacticalMove(tacticId, color) {
+        if (!TACTICS[tacticId]) return -1;
+        let bestMove = -1;
+        let bestScore = -Infinity;
+        for (const idx of getNearbyEmpty()) {
+          if (board[idx] !== EMPTY) continue;
+          board[idx] = color;
+          const analysis = analyzeMove(idx, color);
+          board[idx] = EMPTY;
+          if (!analysis.ids.includes(tacticId) || !isMoveSafeForColor(idx, color)) continue;
+          const score = analysis.score - centerDistance(idx);
+          if (score > bestScore) {
+            bestScore = score;
+            bestMove = idx;
+          }
+        }
+        return bestMove;
+      }
+
+      function showTacticHint(tacticId) {
+        if (gameOver || thinking || turn !== playerColor) {
+          showToast("请等待你的回合再使用杀招提示"); return;
+        }
+        const move = findTacticalMove(tacticId, playerColor);
+        if (move < 0) {
+          activeTactic = ""; render();
+          showToast(TACTICS[tacticId].name + "：" + TACTICS[tacticId].description + "，当前无安全应手");
+          return;
+        }
+        hintIndex = move;
+        activeTactic = tacticId;
+        render();
+        const message = TACTICS[tacticId].name + " · 建议落在 " + positionLabel(move);
+        moveCaption.textContent = message;
+        showToast(message);
+        playTone(780,.09,"triangle",.04);
+        setTimeout(clearHint, 3200);
+      }
+
       function getCandidates(color, limit, includeTactics) {
         const opponent = getOpponentColor(color);
         const emptyCells = getNearbyEmpty();
@@ -889,7 +1084,12 @@
         });
 
         scored.sort((a,b) => b.score - a.score || centerDistance(a.idx) - centerDistance(b.idx));
-        return scored.slice(0, limit);
+        return scored.slice(0, limit).map(item => {
+          board[item.idx] = color;
+          const analysis = analyzeMove(item.idx, color);
+          board[item.idx] = EMPTY;
+          return { idx:item.idx, score:item.score + analysis.score, tactics:analysis.ids };
+        }).sort((a,b) => b.score - a.score || centerDistance(a.idx) - centerDistance(b.idx));
       }
 
       function getSearchCandidates(color, limit) {
@@ -1062,6 +1262,7 @@
       }
 
       function showHint() {
+        activeTactic = "";
         if (gameOver || thinking || turn !== playerColor) {
           showToast("请等待当前回合结束后再使用提示"); return;
         }
@@ -1075,7 +1276,9 @@
 
       function clearHint() {
         hintIndex = -1;
+        activeTactic = "";
         cells.forEach(cell => cell.classList.remove("hint"));
+        document.querySelectorAll("#tacticGroup button").forEach(btn => btn.classList.remove("active"));
       }
 
       function undo() {
@@ -1128,6 +1331,10 @@
         thinkingText.classList.toggle("active", thinking);
         undoBtn.disabled = gameOver || !moveHistory.some(move => move.color === playerColor);
         hintBtn.disabled = gameOver || thinking || turn !== playerColor;
+        document.querySelectorAll("#tacticGroup button").forEach(btn => {
+          btn.disabled = gameOver || thinking || turn !== playerColor;
+          btn.classList.toggle("active", activeTactic === btn.dataset.tactic && hintIndex >= 0);
+        });
         renderHistory();
       }
 
@@ -1139,10 +1346,11 @@
         moveListEl.innerHTML = moveHistory.map((move, index) => {
           const colorName = move.color === HUMAN ? "黑方" : "白方";
           const side = move.color === playerColor ? "你" : "电脑";
+          const tactic = move.tactics && move.tactics.length ? '<span class="move-tactic">' + formatTacticNames(move.tactics, 1) + '</span>' : '';
           return '<div class="move-item"><span class="move-index">' + (index + 1) +
             '</span><span class="move-player"><span class="move-dot ' +
             (move.color === HUMAN ? "black" : "white") + '"></span>' +
-            colorName + ' · ' + side + '</span><span class="move-pos">' +
+            colorName + ' · ' + side + tactic + '</span><span class="move-pos">' +
             positionLabel(move.idx) + '</span></div>';
         }).join("");
         moveListEl.scrollTop = moveListEl.scrollHeight;
